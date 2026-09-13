@@ -1,0 +1,3 @@
+# Windows 上 git 默认 core.autocrlf=true，会在 checkout 时把文件转成 CRLF。
+# 本项目要构建进 Linux 容器（nginx.conf 对换行敏感），统一钉成 LF。
+* text=auto eol=lf

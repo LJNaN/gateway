@@ -1,0 +1,21 @@
+services:
+  # ---- 统一网关：独占 80，按路径把请求分发到各项目 ----
+  #
+  # 刻意不写 depends_on：网关不依赖任何项目容器存在。
+  # 因为 nginx.conf 里用的是「变量形式的 proxy_pass + Docker 内置 DNS」，
+  # 域名解析推迟到每次请求，所以某个项目没起、正在重建、或者被删掉，
+  # 都只影响它自己那条路径，不会拖垮网关，也不会拖垮别的项目。
+  gateway:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+    networks:
+      - web
+
+networks:
+  # 与各项目共享的外部网络，首次需在服务器上 docker network create web
+  web:
+    external: true
