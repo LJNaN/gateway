@@ -33,8 +33,8 @@
 
 | 项 | 值 |
 |---|---|
-| 服务器 | `47.109.29.134`，三个项目分别落在 `/app/{gateway,chat,xianji}` |
-| SSH | `ssh -i "C:/Users/Administrator/Desktop/alicloud/A1.pem" root@47.109.29.134` |
+| 服务器 | 任意一台 Linux 主机，三个项目分别落在 `/app/{gateway,chat,xianji}` |
+| SSH | `ssh <你的用户名>@<你的服务器IP>` |
 | 共享网络 | Docker 外部网络 `web`（`docker network create web`，与项目生命周期无关） |
 | 网关容器 | `gateway-gateway-1` → 发布 `0.0.0.0:80` |
 | chat 容器 | `chat-chat-frontend-1`（内网 80）、`chat-chat-backend-1`（`127.0.0.1:5001`） |
