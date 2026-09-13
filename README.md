@@ -150,3 +150,92 @@ docker run --rm -v /app/gateway/nginx.conf:/etc/nginx/conf.d/default.conf:ro ngi
 
 **排障思路**：某条路径 502 → 先看该项目容器是否在跑（`docker ps`），
 再看它有没有正确接入 `web` 网络且别名拼写与 `nginx.conf` 一致。
+
+## 服务器到期了怎么迁移
+
+三个项目的**代码都在 GitHub**，**业务数据只有宿主机上几个文件**，所以迁移 =
+「搬几个文件 + 改 CI secrets + 重跑一次部署」。网关自己无状态，不用备份，`git clone` 就够。
+
+### 要备份什么
+
+| 项目 | 宿主机路径 | 内容 | 大小参考 |
+|---|---|---|---|
+| chat | `/app/chat/.env` | `DEEPSEEK_KEY`、`CHAT_PASSWORD` | 1 KB |
+| chat | `/app/chat/server/data/` | SQLite，全部聊天记录 | 几十 KB |
+| xianji | `/app/xianji/.env` | `DEEPSEEK_KEY` | 1 KB |
+| xianji | `/app/xianji/server/data/` | SQLite，曲谱元数据 | 几百 KB |
+| xianji | `/app/xianji/server/images/` | 曲谱图片 | 上百 MB |
+| xianji | `/app/xianji/server/backups/` | 自动备份的历史副本 | 可能 1 GB 以上 |
+| gateway | — | 无状态 | — |
+
+两个 `.env` **不在任何仓库里**（CI 的 `rsync --delete` 有意排除了它们），
+所以**必须单独备份**；丢了就得重新去 DeepSeek 申请 Key、重设登录密码。
+`backups/` 只是历史副本，实在搬不动可以放弃。
+
+### 步骤
+
+**1. 旧机器还登得上时，先打包**
+
+```bash
+mkdir -p /root/migrate
+tar czf /root/migrate/chat.tgz   -C /app/chat   .env server/data
+tar czf /root/migrate/xianji.tgz -C /app/xianji .env server/data server/images
+```
+
+拷回本地（`backups/` 大，按需决定）：
+
+```bash
+scp -i <你的私钥> root@<旧IP>:/root/migrate/*.tgz .
+```
+
+**2. 新机器准备**
+
+```bash
+curl -fsSL https://get.docker.com | sh     # 装 Docker（含 compose 插件）
+docker network create web                  # 三个项目共享的外部网络
+mkdir -p /app/{gateway,chat,xianji}
+```
+
+云厂商安全组放行 **80**——网关是唯一对外的端口，各项目容器都不发布宿主机端口。
+
+**3. 恢复数据**
+
+```bash
+tar xzf chat.tgz   -C /app/chat
+tar xzf xianji.tgz -C /app/xianji
+```
+
+**4. 部署三个项目**
+
+```bash
+cd /app/gateway && git clone https://github.com/<你的用户名>/gateway . && docker compose up -d
+cd /app/chat    && git clone https://github.com/<你的用户名>/chat .    && docker compose up -d --build
+cd /app/xianji  && git clone https://github.com/<你的用户名>/xianji .  && docker compose up -d --build
+```
+
+> 先起网关没关系——它的 `proxy_pass` 是变量形式、按请求解析，项目没起只会让
+> 那条路径 502，不会让网关自己起不来。
+
+**5. 改 CI secrets**
+
+三个仓库都要把 `SERVER_HOST` 改成新 IP；如果新机器换了 SSH 密钥，
+`SERVER_SSH_KEY` 也要换（`SERVER_USER` 一般不变）。改完随便 push 一次，
+看 CI 能否连上新机器，就是最好的验证。
+
+**6. 验证**
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' http://<新IP>/         # 期望 302 → /guitar/
+curl -s -o /dev/null -w '%{http_code}\n' http://<新IP>/chat/    # 期望 200
+curl -s -o /dev/null -w '%{http_code}\n' http://<新IP>/guitar/  # 期望 200
+```
+
+再手动确认 `/chat/` 能用 `.env` 里的密码登录、`/guitar/` 能正常浏览曲谱。
+
+**7. 收尾**
+
+以后要是买了域名，把 A 记录指向新 IP 即可，nginx 完全不用改。
+
+> **注意**：如果旧机器已经过期停机、SSH 都进不去，上面的数据就取不出来了。
+> 真正保命的是**平时就有备份**，而不是等过期了才想搬。xianji 有 `backup` 容器
+> 在定时备份，chat 没有——建议定期手动把上表的文件拉回本地。
