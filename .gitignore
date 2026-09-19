@@ -1,5 +1,8 @@
 .claude/
 
+# TLS 证书与私钥：只能手工 scp 到服务器，绝不能进仓库
+certs/
+
 # OS 文件
 .DS_Store
 Thumbs.db

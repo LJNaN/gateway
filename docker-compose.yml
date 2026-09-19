@@ -1,5 +1,5 @@
 services:
-  # ---- 统一网关：独占 80，按路径把请求分发到各项目 ----
+  # ---- 统一网关：独占 80 / 443，按路径把请求分发到各项目 ----
   #
   # 刻意不写 depends_on：网关不依赖任何项目容器存在。
   # 因为 nginx.conf 里用的是「变量形式的 proxy_pass + Docker 内置 DNS」，
@@ -9,8 +9,14 @@ services:
     image: nginx:alpine
     ports:
       - "80:80"
+      - "443:443"
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # 路由表：被 80 兜底块和 443 块各 include 一次
+      - ./routes.inc:/etc/nginx/routes.inc:ro
+      # TLS 证书。宿主机目录需先存在并放好文件（见 README「HTTPS 证书」）；
+      # 若目录为空，nginx 会因读不到证书而启动失败。
+      - ./certs:/etc/nginx/certs:ro
     restart: unless-stopped
     networks:
       - web
