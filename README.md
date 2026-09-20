@@ -40,6 +40,7 @@
 | SSH | `ssh <你的用户名>@<你的服务器IP>` |
 | 共享网络 | Docker 外部网络 `web`（`docker network create web`，与项目生命周期无关） |
 | 网关容器 | `gateway-gateway-1` → 发布 `0.0.0.0:80`、`0.0.0.0:443` |
+| 对外域名 | `www.liujn.fun`、`www.jnnnn.top`（都指向本机，各一张证书，路径完全相同） |
 | TLS 证书 | `/app/gateway/certs/`（宿主机目录，**不在仓库里**，见下文） |
 | chat 容器 | `chat-chat-frontend-1`（内网 80）、`chat-chat-backend-1`（`127.0.0.1:5001`） |
 | xianji 容器 | `xianji-frontend-1`（内网 80）、`xianji-backend-1`（`127.0.0.1:5000`）、`xianji-backup-1` |
@@ -71,9 +72,10 @@
 访问入口：
 
 - `https://www.liujn.fun/` → 302 跳到 `/guitar/`（弦集）
+- `https://www.jnnnn.top/` → 同上，两个域名的路径完全一致
 - `https://www.liujn.fun/chat/` → 对话
 - `https://www.liujn.fun/guitar/` → 弦集
-- `http://<服务器IP>/guitar/` → 同上，走 HTTP（证书没签 IP，所以裸 IP 不做跳转）
+- `http://<服务器IP>/guitar/` → 同上，走 HTTP（证书签的是域名、没签 IP，所以裸 IP 不做跳转）
 
 ## 约定
 
@@ -128,15 +130,18 @@ networks:
 
 ## HTTPS 证书
 
-域名：`www.liujn.fun`（证书同时覆盖 `liujn.fun`）。
+两个域名各一张证书，每张都同时覆盖带 `www` 和不带 `www` 的名字：
 
-| 项 | 值 |
-|---|---|
-| 宿主机路径 | `/app/gateway/certs/www.liujn.fun.pem`、`.key` |
-| 容器内路径 | `/etc/nginx/certs/`（只读挂载） |
-| 签发 | DigiCert Encryption Everywhere DV（免费 90 天） |
-| 有效期 | 2026-09-19 → **2026-12-17** |
-| 引用处 | `nginx.conf` 的 443 server 块 |
+| 域名 | 文件（都在 `/app/gateway/certs/`） | 有效期 |
+|---|---|---|
+| `www.liujn.fun`、`liujn.fun` | `www.liujn.fun.pem` / `.key` | 2026-09-19 → **2026-12-17** |
+| `www.jnnnn.top`、`jnnnn.top` | `www.jnnnn.top.pem` / `.key` | 2026-09-20 → **2026-12-18** |
+
+- **签发**：DigiCert Encryption Everywhere DV，免费 90 天，**不自动续期**，到期要重新申请
+- **容器内路径**：`/etc/nginx/certs/`（只读挂载）
+- **引用处**：`nginx.conf` 里对应域名的 443 server 块
+- **加第三个域名**：签证书 → scp 进 `certs/` → 加一个 443 块 + 把域名补进那个
+  80 跳转块的 `server_name`。`check-certs.sh` 会自动认出新证书，不用改它。
 
 ### 为什么不进仓库
 

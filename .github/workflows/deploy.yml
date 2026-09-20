@@ -22,15 +22,6 @@ jobs:
       - name: Ensure target directory exists
         run: ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "mkdir -p /app/gateway"
 
-      # 证书不进仓库（私钥不能提交），只能手工 scp 到服务器。这里先拦一道：
-      # 证书缺失时 nginx 会直接启动失败，而网关一挂连 80 端口的 HTTP 也没了，
-      # 所以宁可这次部署中止，也不要让容器起不来。
-      - name: Preflight - 检查服务器上有 TLS 证书
-        run: |
-          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
-            "ls /app/gateway/certs/*.pem /app/gateway/certs/*.key" \
-            || { echo "::error::/app/gateway/certs/ 缺少 .pem/.key，已中止部署。请先 scp 证书上去（见 README「HTTPS 证书」）"; exit 1; }
-
       - name: Sync files via rsync
         run: |
           # --exclude='certs' 有两个作用：不上传本地的 certs/，以及让 --delete
@@ -38,6 +29,12 @@ jobs:
           rsync -avz --delete --exclude='.git' --exclude='.github' --exclude='certs' \
             -e 'ssh -o ServerAliveInterval=30' \
             ./ ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/app/gateway/
+
+      # 必须放在 rsync 之后：要校验的是刚同步上去的 nginx.conf 引用到的证书。
+      # 放 rsync 之前就成了「拿新配置去查旧文件」，加了新域名也发现不了缺证书。
+      # 这里配置只是落了盘、还没生效（容器仍跑旧的），所以查完再决定要不要继续是安全的。
+      - name: Preflight - 证书是否齐全
+        run: ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "sh /app/gateway/check-certs.sh"
 
       - name: Docker compose deploy
         uses: appleboy/ssh-action@v1.2.0
