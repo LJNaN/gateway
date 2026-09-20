@@ -195,6 +195,19 @@ echo | openssl s_client -connect www.liujn.fun:443 -servername www.liujn.fun 2>/
 `/app/<项目>` → `docker compose up -d`。三个仓库共用同一套 secrets
 （`SERVER_SSH_KEY` / `SERVER_HOST` / `SERVER_USER`）。
 
+**本仓库的部署多两道 preflight，且用 `up -d --force-recreate`**（另两个仓库不需要）：
+
+- `check-certs.sh` 查证书文件是否都在；
+- 再用一次性容器跑一遍 `nginx -t` 验配置语法。
+
+两道都在 recreate **之前**跑，任一道失败就中止部署，旧容器照常服务——网关一挂是整站不通，
+所以宁可这次部署失败，也不能把坏配置带进线上容器。
+
+之所以必须 `--force-recreate`：`nginx.conf` 是**单文件** bind mount，绑的是 inode，而
+rsync 改文件是「写临时文件再改名」，inode 就变了。光 `up -d` 认为「配置没变」而不重建容器，
+容器仍读着旧文件——**改了 `nginx.conf` / `routes.inc` 却静默不生效**，且只坏一半（新域名 443
+串到旧证书），极难排查。
+
 服务器上常用命令：
 
 ```bash
@@ -204,7 +217,8 @@ docker compose -f /app/gateway/docker-compose.yml logs -f  # 看网关访问日�
 ```
 
 改完 `nginx.conf` 或 `routes.inc` 想先验证语法再生效（三个挂载缺一不可，
-否则报的错会是「文件找不到」而不是真正的语法问题）：
+否则报的错会是「文件找不到」而不是真正的语法问题）。CI 里已经自动跑同一道检查，
+下面是手工复现它：
 
 ```bash
 docker run --rm \

@@ -36,6 +36,19 @@ jobs:
       - name: Preflight - 证书是否齐全
         run: ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "sh /app/gateway/check-certs.sh"
 
+      # 用一次性容器把「即将生效的配置」验一遍再动线上容器。
+      # 网关同时管着 80 和 443，起不来就是整站不通，所以宁可让部署失败，
+      # 也不能把配置错误带进线上容器（这一步之后才 recreate，失败时旧容器照常服务）。
+      # 三个挂载缺一不可，否则报的是「文件找不到」而不是真正的语法问题。
+      - name: Preflight - nginx 配置语法
+        run: |
+          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+            "docker run --rm \
+              -v /app/gateway/nginx.conf:/etc/nginx/conf.d/default.conf:ro \
+              -v /app/gateway/routes.inc:/etc/nginx/routes.inc:ro \
+              -v /app/gateway/certs:/etc/nginx/certs:ro \
+              nginx:alpine nginx -t"
+
       - name: Docker compose deploy
         uses: appleboy/ssh-action@v1.2.0
         with:
@@ -45,4 +58,7 @@ jobs:
           script: |
             cd /app/gateway
             docker network create web 2>/dev/null || true
-            docker compose up -d
+            # --force-recreate 是必须的，不是保险：nginx.conf 是单文件 bind mount，
+            # 绑的是 inode，而 rsync 改文件是「写临时文件再改名」——inode 变了，
+            # 旧容器仍读着旧文件，光 `up -d` 不会重建，改了配置也静默不生效。
+            docker compose up -d --force-recreate
