@@ -94,6 +94,26 @@ location /md-api/ {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 }
 
+# ============ 作品集（xiaoou-portfolio） ============
+# 这个项目只有接口和图片，没有前端页面，所以没有「/<路径>/」和 return 301 那两段。
+# 图片的长缓存由 FastAPI 自己发（URL 带版本号时 immutable 一年），这里不要覆盖。
+
+location /portfolio-api/ {
+    set $upstream http://xiaoou-api:5003;
+    proxy_pass $upstream;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+
+location /portfolio-images/ {
+    set $upstream http://xiaoou-api:5003;
+    proxy_pass $upstream;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+
 # ── 新项目照抄下面这段（记得 return 301 那段也加上）────────────
 # location = /<路径> {
 #     return 301 /<路径>/;
