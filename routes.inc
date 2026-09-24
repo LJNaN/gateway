@@ -71,6 +71,29 @@ location /chat-api/ {
     proxy_read_timeout 300s;
 }
 
+# ============ 文稿（md） ============
+
+location = /md {
+    return 301 /md/;
+}
+
+location /md/ {
+    set $upstream http://md-web:80;
+    proxy_pass $upstream;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+
+# 纯 JSON 接口，没有 SSE，不需要 chat 那套关缓冲和长超时
+location /md-api/ {
+    set $upstream http://md-api:5002;
+    proxy_pass $upstream;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+
 # ── 新项目照抄下面这段（记得 return 301 那段也加上）────────────
 # location = /<路径> {
 #     return 301 /<路径>/;

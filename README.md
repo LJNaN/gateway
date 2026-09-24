@@ -15,16 +15,16 @@
                               │  加入 Docker 外部网络 web
         ┌─────────────────────┼─────────────────────┐
         │                     │                     │
-   /guitar/*             /chat/*             （以后新增的项目）
-        │                     │
-   ┌────▼─────┐          ┌────▼─────┐
-   │xianji-web│          │ chat-web │   前端：内网 80，用 expose，不碰宿主机端口
-   └────┬─────┘          └────┬─────┘
-        │                     │
-   ┌────▼─────┐          ┌────▼─────┐
-   │xianji-api│          │ chat-api │   后端：绑 127.0.0.1，只经网关访问
-   │  :5000   │          │  :5001   │
-   └──────────┘          └──────────┘
+   /guitar/*             /chat/*               /md/*
+        │                     │                     │
+   ┌────▼─────┐          ┌────▼─────┐         ┌────▼─────┐
+   │xianji-web│          │ chat-web │         │  md-web  │  前端：内网 80，expose，不碰宿主机端口
+   └────┬─────┘          └────┬─────┘         └────┬─────┘
+        │                     │                     │
+   ┌────▼─────┐          ┌────▼─────┐         ┌────▼─────┐
+   │xianji-api│          │ chat-api │         │  md-api  │  后端：绑 127.0.0.1，只经网关访问
+   │  :5000   │          │  :5001   │         │  :5002   │
+   └──────────┘          └──────────┘         └──────────┘
 ```
 
 路径路由写在 `routes.inc` 里，由 80 兜底块和 443 块各 `include` 一次——两个入口共用
@@ -36,7 +36,7 @@
 
 | 项 | 值 |
 |---|---|
-| 服务器 | 任意一台 Linux 主机，三个项目分别落在 `/app/{gateway,chat,xianji}` |
+| 服务器 | 任意一台 Linux 主机，四个项目分别落在 `/app/{gateway,chat,xianji,md}` |
 | SSH | `ssh <你的用户名>@<你的服务器IP>` |
 | 共享网络 | Docker 外部网络 `web`（`docker network create web`，与项目生命周期无关） |
 | 网关容器 | `gateway-gateway-1` → 发布 `0.0.0.0:80`、`0.0.0.0:443` |
@@ -44,7 +44,9 @@
 | TLS 证书 | `/app/gateway/certs/`（宿主机目录，**不在仓库里**，见下文） |
 | chat 容器 | `chat-chat-frontend-1`（内网 80）、`chat-chat-backend-1`（`127.0.0.1:5001`） |
 | xianji 容器 | `xianji-frontend-1`（内网 80）、`xianji-backend-1`（`127.0.0.1:5000`）、`xianji-backup-1` |
+| md 容器 | `md-md-frontend-1`（内网 80）、`md-md-backend-1`（`127.0.0.1:5002`） |
 | 聊天记录落盘 | `/app/chat/server/data/database.sqlite`（宿主机 bind mount，容器重建不丢） |
+| 文稿落盘 | `/app/md/server/data/md/*.md`（宿主机 bind mount，**项目里唯一不可从 GitHub 恢复的数据**） |
 
 > 重启网关只是几毫秒的事，也不影响任何项目的数据——它自己不存东西。
 > 反过来，停掉任何一个项目，只影响它自己那条路径，其余站点照常。
@@ -68,6 +70,7 @@
 | `gateway`（本仓库） | `/app/gateway` | 独占 80 / 443，按路径分发 | 全部 |
 | `chat` | `/app/chat` | AI 对话 | `/chat/`、`/chat-api/` |
 | `xianji` | `/app/xianji` | 弦集吉他谱 | `/guitar/`、`/guitar-api/`、`/guitar-images/` |
+| `md` | `/app/md` | 文稿（markdown 阅读 / 编辑） | `/md/`、`/md-api/` |
 
 访问入口：
 
@@ -75,6 +78,7 @@
 - `https://www.jnnnn.top/` → 同上，两个域名的路径完全一致
 - `https://www.liujn.fun/chat/` → 对话
 - `https://www.liujn.fun/guitar/` → 弦集
+- `https://www.liujn.fun/md/` → 文稿
 - `http://<服务器IP>/guitar/` → 同上，走 HTTP（证书签的是域名、没签 IP，所以裸 IP 不做跳转）
 
 ## 约定
@@ -83,8 +87,8 @@
 
 | 别名 | 指向什么 | 例子 |
 |---|---|---|
-| `<项目名>-web` | 该项目的前端（内部 nginx，监听 80） | `xianji-web`、`chat-web` |
-| `<项目名>-api` | 该项目的后端 API | `xianji-api:5000`、`chat-api:5001` |
+| `<项目名>-web` | 该项目的前端（内部 nginx，监听 80） | `xianji-web`、`chat-web`、`md-web` |
+| `<项目名>-api` | 该项目的后端 API | `xianji-api:5000`、`chat-api:5001`、`md-api:5002` |
 
 别名在**项目自己的** `docker-compose.yml` 里声明，例如：
 
@@ -183,6 +187,7 @@ echo | openssl s_client -connect www.liujn.fun:443 -servername www.liujn.fun 2>/
 
 - 改 chat → `git push` chat 仓库 → CI 重建 `chat-backend` / `chat-frontend`
 - 改 xianji → `git push` xianji 仓库 → CI 重建 xianji 的容器
+- 改 md → `git push` md 仓库 → CI 重建 `md-backend` / `md-frontend`
 
 网关和另一个项目完全不知道发生了什么。
 
@@ -191,11 +196,11 @@ echo | openssl s_client -connect www.liujn.fun:443 -servername www.liujn.fun 2>/
 
 ## 部署与排障
 
-三个仓库的 CI 模式一致：push 到 `main` → GitHub Actions 通过 SSH `rsync` 到
-`/app/<项目>` → `docker compose up -d`。三个仓库共用同一套 secrets
+四个仓库的 CI 模式一致：push 到 `main` → GitHub Actions 通过 SSH `rsync` 到
+`/app/<项目>` → `docker compose up -d`。四个仓库共用同一套 secrets
 （`SERVER_SSH_KEY` / `SERVER_HOST` / `SERVER_USER`）。
 
-**本仓库的部署多两道 preflight，且用 `up -d --force-recreate`**（另两个仓库不需要）：
+**本仓库的部署多两道 preflight，且用 `up -d --force-recreate`**（另外三个仓库不需要）：
 
 - `check-certs.sh` 查证书文件是否都在；
 - 再用一次性容器跑一遍 `nginx -t` 验配置语法。
@@ -239,7 +244,7 @@ docker run --rm \
 
 ## 服务器到期了怎么迁移
 
-三个项目的**代码都在 GitHub**，**业务数据只有宿主机上几个文件**，所以迁移 =
+四个项目的**代码都在 GitHub**，**业务数据只有宿主机上几个文件**，所以迁移 =
 「搬几个文件 + 改 CI secrets + 重跑一次部署」。网关本身无状态，`git clone` 就够，
 但它那对 TLS 证书不在仓库里，得单独搬。
 
@@ -253,12 +258,19 @@ docker run --rm \
 | xianji | `/app/xianji/server/data/` | SQLite，曲谱元数据 | 几百 KB |
 | xianji | `/app/xianji/server/images/` | 曲谱图片 | 上百 MB |
 | xianji | `/app/xianji/server/backups/` | 自动备份的历史副本 | 可能 1 GB 以上 |
+| md | `/app/md/.env` | `MD_PASSWORD` | 1 KB |
+| md | `/app/md/server/data/` | 全部 `.md` 文稿 + SQLite（只存登录会话） | 几十 KB |
 | gateway | `/app/gateway/certs/` | TLS 证书与私钥 | 几 KB |
 
-两个 `.env` 和网关的 `certs/` **不在任何仓库里**（CI 的 `rsync --delete` 有意排除了它们），
+三个 `.env` 和网关的 `certs/` **不在任何仓库里**（CI 的 `rsync --delete` 有意排除了它们），
 所以**必须单独备份**；`.env` 丢了就得重新去 DeepSeek 申请 Key、重设登录密码，
 证书丢了可以去阿里云重新下载（同一张证书可重复下载，不必重新申请）。
 `backups/` 只是历史副本，实在搬不动可以放弃。
+
+> **md 的文稿要格外当心**：它和别的项目不一样——chat 的聊天记录、xianji 的曲谱都还能
+> 从别处重建，而 `server/data/md/*.md` 是**手写的原始文档，GitHub 上没有任何副本，
+> 丢了就是真丢了**。这个目录里的 SQLite 反而无所谓（只有登录会话，重新登录即可）。
+> 建议单独、更频繁地把它拉回本地。
 
 ### 步骤
 
@@ -268,6 +280,7 @@ docker run --rm \
 mkdir -p /root/migrate
 tar czf /root/migrate/chat.tgz    -C /app/chat    .env server/data
 tar czf /root/migrate/xianji.tgz  -C /app/xianji  .env server/data server/images
+tar czf /root/migrate/md.tgz      -C /app/md      .env server/data
 tar czf /root/migrate/gateway.tgz -C /app/gateway certs
 ```
 
@@ -281,8 +294,8 @@ scp -i <你的私钥> root@<旧IP>:/root/migrate/*.tgz .
 
 ```bash
 curl -fsSL https://get.docker.com | sh     # 装 Docker（含 compose 插件）
-docker network create web                  # 三个项目共享的外部网络
-mkdir -p /app/{gateway,chat,xianji}
+docker network create web                  # 四个项目共享的外部网络
+mkdir -p /app/{gateway,chat,xianji,md}
 ```
 
 云厂商安全组放行 **80 与 443**——网关是唯一对外的服务，各项目容器都不发布宿主机端口。
@@ -292,6 +305,7 @@ mkdir -p /app/{gateway,chat,xianji}
 ```bash
 tar xzf chat.tgz    -C /app/chat
 tar xzf xianji.tgz  -C /app/xianji
+tar xzf md.tgz      -C /app/md
 tar xzf gateway.tgz -C /app/gateway
 chmod 600 /app/gateway/certs/*.key
 ```
@@ -299,12 +313,13 @@ chmod 600 /app/gateway/certs/*.key
 > 证书必须在启动网关**之前**就位：`docker-compose.yml` 把 `./certs` 挂进了容器，
 > 读不到证书 nginx 会启动失败，而这个容器同时管着 80 和 443，一挂整站不通。
 
-**4. 部署三个项目**
+**4. 部署四个项目**
 
 ```bash
 cd /app/gateway && git clone https://github.com/<你的用户名>/gateway . && docker compose up -d
 cd /app/chat    && git clone https://github.com/<你的用户名>/chat .    && docker compose up -d --build
 cd /app/xianji  && git clone https://github.com/<你的用户名>/xianji .  && docker compose up -d --build
+cd /app/md      && git clone https://github.com/<你的用户名>/md .      && docker compose up -d --build
 ```
 
 > 先起网关没关系——它的 `proxy_pass` 是变量形式、按请求解析，项目没起只会让
@@ -312,7 +327,7 @@ cd /app/xianji  && git clone https://github.com/<你的用户名>/xianji .  && d
 
 **5. 改 CI secrets**
 
-三个仓库都要把 `SERVER_HOST` 改成新 IP；如果新机器换了 SSH 密钥，
+四个仓库都要把 `SERVER_HOST` 改成新 IP；如果新机器换了 SSH 密钥，
 `SERVER_SSH_KEY` 也要换（`SERVER_USER` 一般不变）。改完随便 push 一次，
 看 CI 能否连上新机器，就是最好的验证。
 
@@ -321,14 +336,18 @@ cd /app/xianji  && git clone https://github.com/<你的用户名>/xianji .  && d
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' http://<新IP>/            # 期望 302 → /guitar/
 curl -s -o /dev/null -w '%{http_code}\n' http://<新IP>/chat/       # 期望 200
+curl -s -o /dev/null -w '%{http_code}\n' http://<新IP>/md/         # 期望 200
 curl -s -o /dev/null -w '%{http_code}\n' https://www.liujn.fun/    # 期望 302 → /guitar/
 curl -s -o /dev/null -w '%{http_code}\n' https://www.liujn.fun/chat/  # 期望 200
+curl -s -o /dev/null -w '%{http_code}\n' https://www.liujn.fun/md/    # 期望 200
+curl -s -o /dev/null -w '%{http_code}\n' https://www.liujn.fun/md-api/auth-check  # 期望 401
 curl -s -o /dev/null -w '%{http_code}\n' -L http://www.liujn.fun/  # 期望 200（80 跳 443）
 ```
 
 **443 一律返回 000 / 卡住**，八成是安全组没放行 443，不是 nginx 的问题。
 
-再手动确认 `/chat/` 能用 `.env` 里的密码登录、`/guitar/` 能正常浏览曲谱。
+再手动确认 `/chat/` 能用 `.env` 里的密码登录、`/guitar/` 能正常浏览曲谱、
+`/md/` 能用密码进去并看到文稿列表。
 
 **7. 收尾**
 
