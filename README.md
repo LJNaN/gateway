@@ -40,7 +40,7 @@
 | SSH | `ssh <你的用户名>@<你的服务器IP>` |
 | 共享网络 | Docker 外部网络 `web`（`docker network create web`，与项目生命周期无关） |
 | 网关容器 | `gateway-gateway-1` → 发布 `0.0.0.0:80`、`0.0.0.0:443` |
-| 对外域名 | `www.liujn.fun`、`www.jnnnn.top`（都指向本机，各一张证书，路径完全相同） |
+| 对外域名 | `www.jnnnn.top`（唯一的对外入口） |
 | TLS 证书 | `/app/gateway/certs/`（宿主机目录，**不在仓库里**，见下文） |
 | chat 容器 | `chat-chat-frontend-1`（内网 80）、`chat-chat-backend-1`（`127.0.0.1:5001`） |
 | xianji 容器 | `xianji-frontend-1`（内网 80）、`xianji-backend-1`（`127.0.0.1:5000`）、`xianji-backup-1` |
@@ -124,11 +124,10 @@ ssh root@<服务器IP> 'dmesg -T | grep -iE "out of memory|oom-kill" | tail; cat
 
 访问入口：
 
-- `https://www.liujn.fun/` → 302 跳到 `/guitar/`（弦集）
-- `https://www.jnnnn.top/` → 同上，两个域名的路径完全一致
-- `https://www.liujn.fun/chat/` → 对话
-- `https://www.liujn.fun/guitar/` → 弦集
-- `https://www.liujn.fun/md/` → 文稿
+- `https://www.jnnnn.top/` → 302 跳到 `/guitar/`（弦集）
+- `https://www.jnnnn.top/chat/` → 对话
+- `https://www.jnnnn.top/guitar/` → 弦集
+- `https://www.jnnnn.top/md/` → 文稿
 - `http://<服务器IP>/guitar/` → 同上，走 HTTP（证书签的是域名、没签 IP，所以裸 IP 不做跳转）
 
 ## 约定
@@ -183,18 +182,21 @@ networks:
 
 ## HTTPS 证书
 
-两个域名各一张证书，每张都同时覆盖带 `www` 和不带 `www` 的名字：
+只剩一个域名，证书同时覆盖带 `www` 和不带 `www` 的名字：
 
 | 域名 | 文件（都在 `/app/gateway/certs/`） | 有效期 |
 |---|---|---|
-| `www.liujn.fun`、`liujn.fun` | `www.liujn.fun.pem` / `.key` | 2026-09-19 → **2026-12-17** |
 | `www.jnnnn.top`、`jnnnn.top` | `www.jnnnn.top.pem` / `.key` | 2026-09-20 → **2026-12-18** |
 
 - **签发**：DigiCert Encryption Everywhere DV，免费 90 天，**不自动续期**，到期要重新申请
 - **容器内路径**：`/etc/nginx/certs/`（只读挂载）
 - **引用处**：`nginx.conf` 里对应域名的 443 server 块
-- **加第三个域名**：签证书 → scp 进 `certs/` → 加一个 443 块 + 把域名补进那个
+- **加一个新域名**：签证书 → scp 进 `certs/` → 加一个 443 块 + 把域名补进那个
   80 跳转块的 `server_name`。`check-certs.sh` 会自动认出新证书，不用改它。
+
+> `www.liujn.fun` 那张证书已于 2026-09-25 撤掉，`liujn.fun` 相关的 443 块、
+> 80 跳转里的 `server_name` 和服务器上的证书文件都已清掉，对外只剩 `www.jnnnn.top`。
+> **别再加回来。**
 
 ### 为什么不进仓库
 
@@ -211,8 +213,8 @@ networks:
 在本地拿到新的 `.pem` / `.key` 后：
 
 ```bash
-scp www.liujn.fun.pem www.liujn.fun.key root@<服务器IP>:/app/gateway/certs/
-ssh root@<服务器IP> 'chmod 600 /app/gateway/certs/www.liujn.fun.key && \
+scp www.jnnnn.top.pem www.jnnnn.top.key root@<服务器IP>:/app/gateway/certs/
+ssh root@<服务器IP> 'chmod 600 /app/gateway/certs/www.jnnnn.top.key && \
                      cd /app/gateway && docker compose restart gateway'
 ```
 
@@ -221,7 +223,7 @@ ssh root@<服务器IP> 'chmod 600 /app/gateway/certs/www.liujn.fun.key && \
 改完顺手验一下：
 
 ```bash
-echo | openssl s_client -connect www.liujn.fun:443 -servername www.liujn.fun 2>/dev/null \
+echo | openssl s_client -connect www.jnnnn.top:443 -servername www.jnnnn.top 2>/dev/null \
   | openssl x509 -noout -dates
 ```
 
@@ -396,11 +398,11 @@ cd /app/md      && git clone https://github.com/<你的用户名>/md .      && d
 curl -s -o /dev/null -w '%{http_code}\n' http://<新IP>/            # 期望 302 → /guitar/
 curl -s -o /dev/null -w '%{http_code}\n' http://<新IP>/chat/       # 期望 200
 curl -s -o /dev/null -w '%{http_code}\n' http://<新IP>/md/         # 期望 200
-curl -s -o /dev/null -w '%{http_code}\n' https://www.liujn.fun/    # 期望 302 → /guitar/
-curl -s -o /dev/null -w '%{http_code}\n' https://www.liujn.fun/chat/  # 期望 200
-curl -s -o /dev/null -w '%{http_code}\n' https://www.liujn.fun/md/    # 期望 200
-curl -s -o /dev/null -w '%{http_code}\n' https://www.liujn.fun/md-api/auth-check  # 期望 401
-curl -s -o /dev/null -w '%{http_code}\n' -L http://www.liujn.fun/  # 期望 200（80 跳 443）
+curl -s -o /dev/null -w '%{http_code}\n' https://www.jnnnn.top/    # 期望 302 → /guitar/
+curl -s -o /dev/null -w '%{http_code}\n' https://www.jnnnn.top/chat/  # 期望 200
+curl -s -o /dev/null -w '%{http_code}\n' https://www.jnnnn.top/md/    # 期望 200
+curl -s -o /dev/null -w '%{http_code}\n' https://www.jnnnn.top/md-api/auth-check  # 期望 401
+curl -s -o /dev/null -w '%{http_code}\n' -L http://www.jnnnn.top/  # 期望 200（80 跳 443）
 ```
 
 **443 一律返回 000 / 卡住**，八成是安全组没放行 443，不是 nginx 的问题。
@@ -410,7 +412,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -L http://www.liujn.fun/  # 期望 200�
 
 **7. 收尾**
 
-域名 A 记录改指向新 IP 即可，nginx 完全不用改（`server_name` 已经是 `liujn.fun` 两个名字）。
+域名 A 记录改指向新 IP 即可，nginx 完全不用改（`server_name` 已经是 `jnnnn.top` 两个名字）。
 
 > **注意**：如果旧机器已经过期停机、SSH 都进不去，上面的数据就取不出来了。
 > 真正保命的是**平时就有备份**，而不是等过期了才想搬。xianji 有 `backup` 容器
