@@ -51,6 +51,56 @@
 > 重启网关只是几毫秒的事，也不影响任何项目的数据——它自己不存东西。
 > 反过来，停掉任何一个项目，只影响它自己那条路径，其余站点照常。
 
+### 容量与内存（踩过坑，这几条别改回去）
+
+| 项 | 值 |
+|---|---|
+| CPU / 内存 | **2 核 / 1.7GB** |
+| Swap | **2GB**（`/swapfile`，写在 `/etc/fstab`） |
+| 磁盘 | 40G（xfs），用了约 16G |
+| 空闲余量 | `available` 只有 **600MB 出头**（`dockerd` 自己就占 229MB） |
+
+四个项目全挤在这一台机器上，**余量非常小**。往上加服务、或者跑 `docker build`
+（pip / npm install 的峰值轻松几百 MB），都可能把内存打满。
+
+**2026-09-25 出过一次事故**：所有站点「打不开」持续了十几分钟，根因不是网关、也不是证书。
+
+- 系统自带的定时任务 `dnf-makecache.timer`（每隔 1~2 小时跑一次，作用只是给
+  「手动装系统包」预热元数据缓存）在 12:33 触发，要从 EPEL 等源下载并建索引，
+  峰值要 **682MB**——超过余量。
+- 建索引磨了 **16 分钟**、CPU 吃满（2 核跑满 1.6 核 ≈ 监控上看到的 80%），
+  12:49 被内核 OOM killer 杀掉。这 16 分钟里整机被拖住，所有请求超时。
+- 当时**完全没配 swap**，内核只能杀进程，没有别的选择。
+
+事后做了五处调整，**都可逆**，退回方式在最右列：
+
+| 改动 | 为什么 | 怎么退回 |
+|---|---|---|
+| 关 `dnf-makecache.timer` | 它只为「手动装包」预热缓存，而这台机器上所有服务都是 Docker 跑的，纯属负担 | `systemctl enable --now dnf-makecache.timer` |
+| 加 2GB `/swapfile` | 零 swap 太脆，内存一有尖峰就直接杀进程 | `swapoff /swapfile`，再删掉 `/etc/fstab` 里那行 |
+| `vm.swappiness` **0 → 60** | 原来 `/etc/sysctl.conf` 第 1 行写死 0，含义是「**宁可 OOM 也不换页**」——不改这个，新加的 swap 等于白加 | 备份在 `/etc/sysctl.conf.bak-*` |
+| 关 `epel` / `epel-cisco-openh264` | 用不上，却每次让 makecache 多下 20MB。EPEL 的 vendor 包里只有 `epel-release` 自己，**没有任何程序依赖它** | `dnf config-manager --set-enabled epel epel-cisco-openh264` |
+| 关宿主机 `nginx` | 它是 `enabled`（开机自启）且配置里 `listen 80`，而 80 归 `docker-proxy`——**重启后谁先抢到 80 是掷硬币**：nginx 赢则网关容器绑不上端口，四个站点全挂；ACME 续期也走 80，会连累裸 IP 证书静默续期失败 | `systemctl enable --now nginx` |
+
+> 宿主机**不需要** nginx——网关的 nginx 跑在容器里。宿主机那份是早期没上 Docker 时的遗留
+> （配置目录还是 Debian 那套 `sites-available/sites-enabled` 布局，里面留着 `guitar_tabs`、
+> `sillytavern.conf.bak`）。
+
+`baseos` / `appstream` / `crb` / `extras` / `docker-ce-stable` / `nginx-stable`
+这六个仓库**必须留着**：前四个是 Rocky 基础源（关了系统更新就废了），
+后两个对应的 docker 和 nginx 都是 rpm 装的。
+
+再遇到「机器卡住 / 站点打不开」，先跑这个，比查 nginx、DNS、证书快得多：
+
+```bash
+ssh root@<服务器IP> 'dmesg -T | grep -iE "out of memory|oom-kill" | tail; cat /proc/loadavg; free -m'
+```
+
+**高 loadavg + 实际 CPU 却 90% 以上 idle** = 尖峰刚结束、或被 OOM 打断，就是这条线索。
+
+> 同类定时任务还剩 `mlocate-updatedb.timer`（每天 00:00 全盘扫描），至今没出过事，
+> 但性质和 `dnf-makecache` 一样，真被压到可以一并关掉。
+
 ## 为什么网关要独立成一个仓库
 
 网关是**共享基础设施**，不属于任何一个业务项目。早期它挂在 chat 项目的 compose 里，
