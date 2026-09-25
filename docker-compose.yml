@@ -18,6 +18,16 @@ services:
       # 若目录为空，nginx 会因读不到证书而启动失败。
       - ./certs:/etc/nginx/certs:ro
     restart: unless-stopped
+    # 打容器自己的 /healthz（见 routes.inc），只验证 nginx 在正常应答。
+    # 刻意不探上游项目路径：上游挂掉不该把网关判成不健康。
+    # -f 是关键：没有它的话 404 也算「成功」，健康检查就永远绿了。
+    # nginx:alpine 自带 /usr/bin/curl（实测非软链，是装进镜像的），没有额外依赖。
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
     networks:
       - web
 

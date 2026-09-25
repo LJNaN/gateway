@@ -5,6 +5,24 @@
 #
 # 这里只放 location；其余指令（resolver、client_max_body_size 等）都在 nginx.conf 里。
 
+# ── 网关自检端点 ──────────────────────────────────────────────────
+# 只证明 nginx 本身在正常应答，不碰任何上游项目。
+#
+# 为什么放在路由表里：容器 healthcheck 打的就是它，而本文件被 80 兜底块和每个
+# 443 块各 include 一次，所以放这儿等于每个入口都自动有，加新域名也不用再补。
+#
+# 为什么不去探 /guitar/ 之类的上游路径：上游项目挂掉不代表网关有问题，混在
+# 一起会让网关替别人背锅、被误判成不健康。
+#
+# `=` 是精确匹配，优先级高于下面所有前缀 location，不会被任何路由吃掉。
+location = /healthz {
+    access_log off;
+    # stock nginx.conf 把 default_type 设成了 application/octet-stream，
+    # 不覆盖的话浏览器打开这个地址会变成「下载文件」而不是显示 ok
+    default_type text/plain;
+    return 200 "ok\n";
+}
+
 # 根路径导向弦集
 location = / {
     return 302 /guitar/;

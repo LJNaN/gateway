@@ -51,6 +51,22 @@
 > 重启网关只是几毫秒的事，也不影响任何项目的数据——它自己不存东西。
 > 反过来，停掉任何一个项目，只影响它自己那条路径，其余站点照常。
 
+### 网关健康检查（`/healthz`）
+
+网关容器配了 healthcheck，打的是 `routes.inc` 里的 `location = /healthz`（直接 `return 200 ok`），
+所以 `docker ps` 里能看到 `(healthy)` / `(unhealthy)`。
+
+- **为什么只打 `/healthz`，不探 `/guitar/` 这类上游路径**：`/healthz` 完全在 nginx 内部闭环，
+  不转发给任何项目。如果拿上游路径当探针，某个项目挂掉会把**网关**判成不健康，
+  就分不清「网关坏了」还是「某个项目坏了」。要盯某个项目，单独探它自己的接口。
+- **探针放在 `routes.inc` 而不是某个 server 块里**：那个文件被 80 兜底块和每个 443 块各
+  `include` 一次，所以放这儿等于每个入口都自动有，以后加新域名不用再补一遍。
+- **healthcheck 本身不会重启容器**。Docker 的 `restart: unless-stopped` 只看进程退出码、
+  不看健康状态。它的价值是给人看的可视状态，以及给外部探针一个可靠的地址。
+  **要真做到「挂了有人知道」，还得在云监控里配告警规则打这个端点**——光有探针没有告警，
+  等于仪表盘没人看。
+- `curl -fsS` 里的 `-f` 不能省：少了它，HTTP 404 也算「成功」，健康检查会永远是绿的。
+
 ### 容量与内存（踩过坑，这几条别改回去）
 
 | 项 | 值 |
@@ -100,6 +116,33 @@ ssh root@<服务器IP> 'dmesg -T | grep -iE "out of memory|oom-kill" | tail; cat
 
 > 同类定时任务还剩 `mlocate-updatedb.timer`（每天 00:00 全盘扫描），至今没出过事，
 > 但性质和 `dnf-makecache` 一样，真被压到可以一并关掉。
+
+#### Docker 日志轮转（2026-09-25 加）
+
+Docker 默认的 `json-file` 驱动**不封顶**，容器日志会一直涨到把磁盘吃光。所以
+`/etc/docker/daemon.json` 里补了：
+
+```json
+"log-driver": "json-file",
+"log-opts": { "max-size": "10m", "max-file": "3" }
+```
+
+每个容器最多留 3 个 10MB 的文件，合计封顶 30MB。改 `daemon.json` 要
+`systemctl restart docker`（几秒钟，9 个容器会短暂中断）。
+
+> **两个坑**：
+>
+> 1. **`log-opts` 只对「新建」的容器生效。** 重启 dockerd 只会把老容器拉起来，
+>    不会给它们换配置——`docker inspect --format '{{.HostConfig.LogConfig}}' <容器名>`
+>    能看到老容器仍是空的 `map[]`。它们要等下次被 recreate 才继承：
+>    网关每次 push 都 `--force-recreate`，所以最先拿到；其余项目要等自己的代码变动触发重建。
+>    想立刻全部生效，得把 9 个容器都 `--force-recreate` 重建一遍（日志总共才 1MB 出头，
+>    当时判断不值得为它中断所有站点，就没做）。
+> 2. **改 `daemon.json` 前先备份，且必须保住 `registry-mirrors`。** 文件里原本只有那三个
+>    国内镜像源（拉镜像全靠它），重写时漏掉会拖慢甚至拉不动镜像。另外 JSON 写坏会导致
+>    **dockerd 起不来 = 9 个容器全挂**，所以改完先 `python3 -c "import json;json.load(...)"`
+>    验一遍，再 `dockerd --validate --config-file=/etc/docker/daemon.json`。
+>    备份留在 `/etc/docker/daemon.json.bak-*`。
 
 ## 为什么网关要独立成一个仓库
 
