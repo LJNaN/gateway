@@ -3,6 +3,9 @@
 # TLS 证书与私钥：只能手工 scp 到服务器，绝不能进仓库
 certs/
 
+# ACME HTTP-01 挑战目录：服务器上的 lego 自己写自己清，本地不需要也不该有
+acme/
+
 # OS 文件
 .DS_Store
 Thumbs.db

@@ -155,6 +155,9 @@ networks:
 - CI 的 rsync 带 `--exclude='certs'`——既不上传，也让 `--delete` 不会把它删掉
   （rsync 默认不删除被 exclude 的文件）
 
+续期用的 `acme/` 也一起 `--exclude` 掉了。它的理由和证书不同（里面没有私钥，
+纯粹是运行时目录），但不排除的话每次部署都会清空它，正好把验证中的挑战删掉。
+
 证书只存在于服务器上，**换机器时要手工再传一次**。
 
 ### 续期（到期前）
@@ -175,6 +178,37 @@ ssh root@<服务器IP> 'chmod 600 /app/gateway/certs/www.liujn.fun.key && \
 echo | openssl s_client -connect www.liujn.fun:443 -servername www.liujn.fun 2>/dev/null \
   | openssl x509 -noout -dates
 ```
+
+### 裸 IP 证书（唯一自动续期的一张）
+
+裸 IP `47.109.29.134` 另有一张证书，给「拿不到域名、只能连 IP」的客户端用
+（典型场景：域名备案还没下来，微信小程序只能靠裸 IP 做真机调试）。
+
+| | |
+|---|---|
+| 文件 | `/app/gateway/certs/ip-47.109.29.134.pem` / `.key` |
+| 签发 | Let's Encrypt，SAN 里直接放 IP（`IP Address:47.109.29.134`） |
+| 有效期 | **只有 160 小时**（约 6.6 天），IP 证书只能签短期的 |
+| 引用处 | `nginx.conf` 的 443 默认块（`server_name _`） |
+| 续期 | 服务器上 cron 每天跑 `/app/gateway/renew-ip-cert.sh`（随仓库部署） |
+
+160 小时不可能手工签，所以这张**必须**靠脚本续：`lego run`（5.x 里它就是续期命令，
+该不该续由它按 ARI / 寿命过半自己判断）走 80 端口的 HTTP-01 挑战（token 写在
+`/app/gateway/acme/`，由 compose 挂进容器），签发成功后经 `--deploy-hook` 覆盖
+`certs/` 里那两个文件再 reload nginx。日志在 `/var/log/renew-ip-cert.log`。
+
+```bash
+ssh root@<服务器IP> 'sh /app/gateway/renew-ip-cert.sh'   # 手动跑一次看结果
+```
+
+两个容易踩的点：
+
+- **挑战目录不能放在 `certs/` 里**。那个目录是 700，而 nginx worker 以 `nginx`
+  用户跑、进不去 700 的目录，会返回 403 而不是把 token 发出去。所以挑战走独立的
+  `acme/`（755）。
+- **阿里云的备案拦截只看 Host**：Host 是域名且未备案就重置 / 403，Host 是 IP 则放行。
+  这既是裸 IP 能走通的原因，也说明这条路只到备案通过为止。另外微信小程序的
+  「服务器域名」**不接受 IP**，所以它只能用于开发调试，不能上线。
 
 ### 安全组
 
