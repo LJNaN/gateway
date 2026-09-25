@@ -80,7 +80,7 @@
 | 加 2GB `/swapfile` | 零 swap 太脆，内存一有尖峰就直接杀进程 | `swapoff /swapfile`，再删掉 `/etc/fstab` 里那行 |
 | `vm.swappiness` **0 → 60** | 原来 `/etc/sysctl.conf` 第 1 行写死 0，含义是「**宁可 OOM 也不换页**」——不改这个，新加的 swap 等于白加 | 备份在 `/etc/sysctl.conf.bak-*` |
 | 关 `epel` / `epel-cisco-openh264` | 用不上，却每次让 makecache 多下 20MB。EPEL 的 vendor 包里只有 `epel-release` 自己，**没有任何程序依赖它** | `dnf config-manager --set-enabled epel epel-cisco-openh264` |
-| 关宿主机 `nginx` | 它是 `enabled`（开机自启）且配置里 `listen 80`，而 80 归 `docker-proxy`——**重启后谁先抢到 80 是掷硬币**：nginx 赢则网关容器绑不上端口，四个站点全挂；ACME 续期也走 80，会连累裸 IP 证书静默续期失败 | `systemctl enable --now nginx` |
+| 关宿主机 `nginx` | 它是 `enabled`（开机自启）且配置里 `listen 80`，而 80 归 `docker-proxy`——**重启后谁先抢到 80 是掷硬币**：nginx 赢则网关容器绑不上端口，**四个站点全挂** | `systemctl enable --now nginx` |
 
 > 宿主机**不需要** nginx——网关的 nginx 跑在容器里。宿主机那份是早期没上 Docker 时的遗留
 > （配置目录还是 Debian 那套 `sites-available/sites-enabled` 布局，里面留着 `guitar_tabs`、
@@ -159,9 +159,8 @@ networks:
 **只有网关发布 `ports: "80:80"` / `"443:443"`。** 业务项目一律用 `expose`，
 绝不碰宿主机的 80 / 443。
 
-**路径路由只写在 `routes.inc` 里，别写进 `nginx.conf`。** `nginx.conf` 里那三个 server 块
-（80 域名跳转 / 80 兜底 / 443 主入口）会各 `include` 一次，路由写在 server 块里会导致
-「域名能访问、裸 IP 不能」这种只坏一半的现象。
+**路径路由只写在 `routes.inc` 里，别写进 `nginx.conf`。** 80 兜底块和每个 443 域名块都要
+各 `include` 一次，路由写在单个 server 块里会导致「有的入口能访问、有的不能」这种只坏一半的现象。
 
 **网关里 `proxy_pass` 必须写成变量形式**（`set $upstream ...; proxy_pass $upstream;`）
 并配 `resolver 127.0.0.11`。理由见 `nginx.conf` 顶部注释——简言之：字面主机名是启动时
@@ -205,9 +204,6 @@ networks:
 - CI 的 rsync 带 `--exclude='certs'`——既不上传，也让 `--delete` 不会把它删掉
   （rsync 默认不删除被 exclude 的文件）
 
-续期用的 `acme/` 也一起 `--exclude` 掉了。它的理由和证书不同（里面没有私钥，
-纯粹是运行时目录），但不排除的话每次部署都会清空它，正好把验证中的挑战删掉。
-
 证书只存在于服务器上，**换机器时要手工再传一次**。
 
 ### 续期（到期前）
@@ -229,36 +225,15 @@ echo | openssl s_client -connect www.liujn.fun:443 -servername www.liujn.fun 2>/
   | openssl x509 -noout -dates
 ```
 
-### 裸 IP 证书（唯一自动续期的一张）
+### 裸 IP 没有证书
 
-裸 IP `47.109.29.134` 另有一张证书，给「拿不到域名、只能连 IP」的客户端用
-（典型场景：域名备案还没下来，微信小程序只能靠裸 IP 做真机调试）。
+`https://<服务器IP>/` 会因证书不匹配（`ERR_CERT_COMMON_NAME_INVALID`）而失败，**这是预期的**——
+走域名即可。80 上的裸 IP 仍然可用（见「访问入口」），只是不做 HTTPS 跳转。
 
-| | |
-|---|---|
-| 文件 | `/app/gateway/certs/ip-47.109.29.134.pem` / `.key` |
-| 签发 | Let's Encrypt，SAN 里直接放 IP（`IP Address:47.109.29.134`） |
-| 有效期 | **只有 160 小时**（约 6.6 天），IP 证书只能签短期的 |
-| 引用处 | `nginx.conf` 的 443 默认块（`server_name _`） |
-| 续期 | 服务器上 cron 每天跑 `/app/gateway/renew-ip-cert.sh`（随仓库部署） |
-
-160 小时不可能手工签，所以这张**必须**靠脚本续：`lego run`（5.x 里它就是续期命令，
-该不该续由它按 ARI / 寿命过半自己判断）走 80 端口的 HTTP-01 挑战（token 写在
-`/app/gateway/acme/`，由 compose 挂进容器），签发成功后经 `--deploy-hook` 覆盖
-`certs/` 里那两个文件再 reload nginx。日志在 `/var/log/renew-ip-cert.log`。
-
-```bash
-ssh root@<服务器IP> 'sh /app/gateway/renew-ip-cert.sh'   # 手动跑一次看结果
-```
-
-两个容易踩的点：
-
-- **挑战目录不能放在 `certs/` 里**。那个目录是 700，而 nginx worker 以 `nginx`
-  用户跑、进不去 700 的目录，会返回 403 而不是把 token 发出去。所以挑战走独立的
-  `acme/`（755）。
-- **阿里云的备案拦截只看 Host**：Host 是域名且未备案就重置 / 403，Host 是 IP 则放行。
-  这既是裸 IP 能走通的原因，也说明这条路只到备案通过为止。另外微信小程序的
-  「服务器域名」**不接受 IP**，所以它只能用于开发调试，不能上线。
+> 2026-09-25 之前这里另签过一张 Let's Encrypt 的 **SAN IP 证书**（`IP Address:47.109.29.134`，
+> 只有 160 小时有效期），只为「域名还没备案、微信小程序只能靠裸 IP 做真机调试」服务。
+> 那条路已废弃 —— 证书文件、ACME 挑战目录 `/app/gateway/acme`、续期脚本
+> `renew-ip-cert.sh` 和它的 cron 都已一并清掉，**别再加回来**。
 
 ### 安全组
 

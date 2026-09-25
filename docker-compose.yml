@@ -17,9 +17,6 @@ services:
       # TLS 证书。宿主机目录需先存在并放好文件（见 README「HTTPS 证书」）；
       # 若目录为空，nginx 会因读不到证书而启动失败。
       - ./certs:/etc/nginx/certs:ro
-      # ACME HTTP-01 挑战目录。lego 在宿主机上往里写 token，nginx 只读着发出去。
-      # 裸 IP 证书只有 160 小时有效期、全靠自动续期，少了这个挂载续期就会静默失败。
-      - ./acme:/var/www/acme:ro
     restart: unless-stopped
     networks:
       - web

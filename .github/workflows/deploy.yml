@@ -26,10 +26,8 @@ jobs:
         run: |
           # --exclude='certs' 有两个作用：不上传本地的 certs/，以及让 --delete
           # 不动服务器上的 certs/（rsync 默认不删除被 exclude 的文件）。
-          # --exclude='acme' 同理，而且更要紧：那是续期的 HTTP-01 挑战目录，
-          # 不排除的话每次部署都会清空它，正好把验证中的 token 删掉。
           rsync -avz --delete --exclude='.git' --exclude='.github' \
-            --exclude='certs' --exclude='acme' \
+            --exclude='certs' \
             -e 'ssh -o ServerAliveInterval=30' \
             ./ ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/app/gateway/
 
