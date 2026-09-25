@@ -27,6 +27,13 @@
    └──────────┘          └──────────┘         └──────────┘
 ```
 
+作品集是唯一的**例外**：它只有后端、没有前端页面（小程序本身在用户手机上，不在服务器上），
+所以不占上面那种「前端 + 后端」两行，而是单独一条：
+
+```
+   /portfolio-api/*、/portfolio-images/*  ──▶  xiaoou-api:5003
+```
+
 路径路由写在 `routes.inc` 里，由 80 兜底块和 443 块各 `include` 一次——两个入口共用
 同一份路由表，新增项目只改一处。
 
@@ -36,7 +43,7 @@
 
 | 项 | 值 |
 |---|---|
-| 服务器 | 任意一台 Linux 主机，四个项目分别落在 `/app/{gateway,chat,xianji,md}` |
+| 服务器 | 任意一台 Linux 主机，五个项目分别落在 `/app/{gateway,chat,xianji,md,xiaoou-portfolio}` |
 | SSH | `ssh <你的用户名>@<你的服务器IP>` |
 | 共享网络 | Docker 外部网络 `web`（`docker network create web`，与项目生命周期无关） |
 | 网关容器 | `gateway-gateway-1` → 发布 `0.0.0.0:80`、`0.0.0.0:443` |
@@ -45,8 +52,10 @@
 | chat 容器 | `chat-chat-frontend-1`（内网 80）、`chat-chat-backend-1`（`127.0.0.1:5001`） |
 | xianji 容器 | `xianji-frontend-1`（内网 80）、`xianji-backend-1`（`127.0.0.1:5000`）、`xianji-backup-1` |
 | md 容器 | `md-md-frontend-1`（内网 80）、`md-md-backend-1`（`127.0.0.1:5002`） |
+| 作品集容器 | `xiaoou-api`（`127.0.0.1:5003`，**只有后端、没有前端页面**） |
 | 聊天记录落盘 | `/app/chat/server/data/database.sqlite`（宿主机 bind mount，容器重建不丢） |
-| 文稿落盘 | `/app/md/server/data/md/*.md`（宿主机 bind mount，**项目里唯一不可从 GitHub 恢复的数据**） |
+| 文稿落盘 | `/app/md/server/data/md/*.md`（宿主机 bind mount，**GitHub 上没有副本**，见「要备份什么」） |
+| 作品集图片落盘 | `/app/xiaoou-portfolio/server/images/`（19 张原图 + 缩略图，**GitHub 上没有副本**，见「要备份什么」） |
 
 > 重启网关只是几毫秒的事，也不影响任何项目的数据——它自己不存东西。
 > 反过来，停掉任何一个项目，只影响它自己那条路径，其余站点照常。
@@ -73,10 +82,10 @@
 |---|---|
 | CPU / 内存 | **2 核 / 1.7GB** |
 | Swap | **2GB**（`/swapfile`，写在 `/etc/fstab`） |
-| 磁盘 | 40G（xfs），用了约 16G |
-| 空闲余量 | `available` 只有 **600MB 出头**（`dockerd` 自己就占 229MB） |
+| 磁盘 | 40G（xfs），用了约 12G |
+| 空闲余量 | `available` 通常 **600~850MB**（`dockerd` 自己 PSS 约 120MB） |
 
-四个项目全挤在这一台机器上，**余量非常小**。往上加服务、或者跑 `docker build`
+五个项目全挤在这一台机器上，**余量非常小**。往上加服务、或者跑 `docker build`
 （pip / npm install 的峰值轻松几百 MB），都可能把内存打满。
 
 **2026-09-25 出过一次事故**：所有站点「打不开」持续了十几分钟，根因不是网关、也不是证书。
@@ -96,7 +105,7 @@
 | 加 2GB `/swapfile` | 零 swap 太脆，内存一有尖峰就直接杀进程 | `swapoff /swapfile`，再删掉 `/etc/fstab` 里那行 |
 | `vm.swappiness` **0 → 60** | 原来 `/etc/sysctl.conf` 第 1 行写死 0，含义是「**宁可 OOM 也不换页**」——不改这个，新加的 swap 等于白加 | 备份在 `/etc/sysctl.conf.bak-*` |
 | 关 `epel` / `epel-cisco-openh264` | 用不上，却每次让 makecache 多下 20MB。EPEL 的 vendor 包里只有 `epel-release` 自己，**没有任何程序依赖它** | `dnf config-manager --set-enabled epel epel-cisco-openh264` |
-| 关宿主机 `nginx` | 它是 `enabled`（开机自启）且配置里 `listen 80`，而 80 归 `docker-proxy`——**重启后谁先抢到 80 是掷硬币**：nginx 赢则网关容器绑不上端口，**四个站点全挂** | `systemctl enable --now nginx` |
+| 关宿主机 `nginx` | 它是 `enabled`（开机自启）且配置里 `listen 80`，而 80 归 `docker-proxy`——**重启后谁先抢到 80 是掷硬币**：nginx 赢则网关容器绑不上端口，**所有站点一起挂** | `systemctl enable --now nginx` |
 
 > 宿主机**不需要** nginx——网关的 nginx 跑在容器里。宿主机那份是早期没上 Docker 时的遗留
 > （配置目录还是 Debian 那套 `sites-available/sites-enabled` 布局，里面留着 `guitar_tabs`、
@@ -164,6 +173,7 @@ Docker 默认的 `json-file` 驱动**不封顶**，容器日志会一直涨到�
 | `chat` | `/app/chat` | AI 对话 | `/chat/`、`/chat-api/` |
 | `xianji` | `/app/xianji` | 弦集吉他谱 | `/guitar/`、`/guitar-api/`、`/guitar-images/` |
 | `md` | `/app/md` | 文稿（markdown 阅读 / 编辑） | `/md/`、`/md-api/` |
+| `xiaoou-portfolio` | `/app/xiaoou-portfolio` | 作品集小程序的后端（图片服务；**前端是小程序，不在服务器上**） | `/portfolio-api/`、`/portfolio-images/` |
 
 访问入口：
 
@@ -171,6 +181,8 @@ Docker 默认的 `json-file` 驱动**不封顶**，容器日志会一直涨到�
 - `https://www.jnnnn.top/chat/` → 对话
 - `https://www.jnnnn.top/guitar/` → 弦集
 - `https://www.jnnnn.top/md/` → 文稿
+- `https://www.jnnnn.top/portfolio-api/content` → 作品集数据（给小程序用，**没有对应的网页**）
+- `https://www.jnnnn.top/healthz` → 网关自检，返回 `200 ok`（见「网关健康检查」）
 - `http://<服务器IP>/guitar/` → 同上，走 HTTP（证书签的是域名、没签 IP，所以裸 IP 不做跳转）
 
 ## 约定
@@ -180,7 +192,11 @@ Docker 默认的 `json-file` 驱动**不封顶**，容器日志会一直涨到�
 | 别名 | 指向什么 | 例子 |
 |---|---|---|
 | `<项目名>-web` | 该项目的前端（内部 nginx，监听 80） | `xianji-web`、`chat-web`、`md-web` |
-| `<项目名>-api` | 该项目的后端 API | `xianji-api:5000`、`chat-api:5001`、`md-api:5002` |
+| `<项目名>-api` | 该项目的后端 API | `xianji-api:5000`、`chat-api:5001`、`md-api:5002`、`xiaoou-api:5003` |
+
+> **只有 `<项目名>-api` 是必需的**，`-web` 只在前端跑在服务器上时才要。
+> `xiaoou-portfolio` 就没有 `-web` 别名——它的前端是微信小程序，跑在用户手机上，
+> 服务器端只有那个 API 容器。
 
 别名在**项目自己的** `docker-compose.yml` 里声明，例如：
 
@@ -211,9 +227,9 @@ networks:
 ## 新增一个项目
 
 1. **建项目仓库**，`docker-compose.yml` 里：
-   - 接入外部网络 `web`，用 `<项目名>-web` / `<项目名>-api` 两个别名；
+   - 接入外部网络 `web`，用 `<项目名>-api` 别名（有前端页面的话再加 `<项目名>-web`）；
    - 前端用 `expose: "80"`，后端绑 `127.0.0.1:<端口>`，**都不要碰 80**；
-   - 参照 `chat` 或 `xianji` 的 compose 抄即可。
+   - 参照 `chat` / `xianji` 的 compose 抄即可；只想跑个纯接口服务的话参照 `xiaoou-portfolio`（它没有前端）。
 2. **在本仓库 `routes.inc` 里加路由**：照抄文件末尾那段注释掉的模板，把路径指到
    上面两个别名。`location = /<路径> { return 301 ...; }` 那段也一并加上。
 3. `git push`。CI 自动同步到 `/app/gateway` 并 `docker compose up -d`。
@@ -300,11 +316,11 @@ echo | openssl s_client -connect www.jnnnn.top:443 -servername www.jnnnn.top 2>/
 
 ## 部署与排障
 
-四个仓库的 CI 模式一致：push 到 `main` → GitHub Actions 通过 SSH `rsync` 到
-`/app/<项目>` → `docker compose up -d`。四个仓库共用同一套 secrets
+五个仓库的 CI 模式一致：push 到 `main` → GitHub Actions 通过 SSH `rsync` 到
+`/app/<项目>` → `docker compose up -d`。五个仓库共用同一套 secrets
 （`SERVER_SSH_KEY` / `SERVER_HOST` / `SERVER_USER`）。
 
-**本仓库的部署多两道 preflight，且用 `up -d --force-recreate`**（另外三个仓库不需要）：
+**本仓库的部署多两道 preflight，且用 `up -d --force-recreate`**（其它仓库不需要）：
 
 - `check-certs.sh` 查证书文件是否都在；
 - 再用一次性容器跑一遍 `nginx -t` 验配置语法。
@@ -345,10 +361,14 @@ docker run --rm \
   CI 里有一步专门拦这个：证书不在位时直接中止部署，不会让网关挂掉。
   > 注意网关一挂，**连 HTTP 也一起没了**（80 和 443 是同一个容器），所以宁可部署失败也不要让容器起不来。
 - 域名跳 HTTPS 后 `curl` 卡住 → 安全组没放行 443。
+- 小程序里图片全裂、但 `/portfolio-api/content` 是 200 → 服务器上 `server/images/full/`
+  里没有原图（图片不进 git，见「要备份什么」）。用 `/portfolio-api/health` 看 `missing` 列表。
+- `/healthz` 之外**任何**路径都 502 → 该项目容器没起来或没接入 `web` 网络；
+  `/healthz` 本身 502 才是网关自己的问题（正常它只 `return 200`，根本不碰上游）。
 
 ## 服务器到期了怎么迁移
 
-四个项目的**代码都在 GitHub**，**业务数据只有宿主机上几个文件**，所以迁移 =
+五个项目的**代码都在 GitHub**，**业务数据只有宿主机上几个文件**，所以迁移 =
 「搬几个文件 + 改 CI secrets + 重跑一次部署」。网关本身无状态，`git clone` 就够，
 但它那对 TLS 证书不在仓库里，得单独搬。
 
@@ -365,11 +385,16 @@ docker run --rm \
 | md | `/app/md/.env` | `MD_PASSWORD` | 1 KB |
 | md | `/app/md/server/data/` | 全部 `.md` 文稿 + SQLite（只存登录会话） | 几十 KB |
 | gateway | `/app/gateway/certs/` | TLS 证书与私钥 | 几 KB |
+| xiaoou | `/app/xiaoou-portfolio/server/images/` | 19 张作品原图 + 自动生成的缩略图 | 约 20 MB |
 
-三个 `.env` 和网关的 `certs/` **不在任何仓库里**（CI 的 `rsync --delete` 有意排除了它们），
-所以**必须单独备份**；`.env` 丢了就得重新去 DeepSeek 申请 Key、重设登录密码，
-证书丢了可以去阿里云重新下载（同一张证书可重复下载，不必重新申请）。
+三个 `.env`、网关的 `certs/` 和作品集的 `images/` **不在任何仓库里**（CI 的 `rsync --delete`
+有意排除了它们），所以**必须单独备份**；`.env` 丢了就得重新去 DeepSeek 申请 Key、
+重设登录密码，证书丢了可以去阿里云重新下载（同一张证书可重复下载，不必重新申请）。
 `backups/` 只是历史副本，实在搬不动可以放弃。
+
+> **作品集的图片要单独留意**：`server/images/full/` 那 19 张原图**服务器上是唯一一份**
+> （仓库里 `.gitignore` 掉了，CI 也靠 `--exclude='server/images'` 才没被 `--delete` 删掉）。
+> `thumb/` 不用管，是服务端用 Pillow 从原图自动生成的，删了下次请求会重建。
 
 > **md 的文稿要格外当心**：它和别的项目不一样——chat 的聊天记录、xianji 的曲谱都还能
 > 从别处重建，而 `server/data/md/*.md` 是**手写的原始文档，GitHub 上没有任何副本，
@@ -386,6 +411,7 @@ tar czf /root/migrate/chat.tgz    -C /app/chat    .env server/data
 tar czf /root/migrate/xianji.tgz  -C /app/xianji  .env server/data server/images
 tar czf /root/migrate/md.tgz      -C /app/md      .env server/data
 tar czf /root/migrate/gateway.tgz -C /app/gateway certs
+tar czf /root/migrate/xiaoou.tgz  -C /app/xiaoou-portfolio server/images
 ```
 
 拷回本地（`backups/` 大，按需决定）：
@@ -398,62 +424,93 @@ scp -i <你的私钥> root@<旧IP>:/root/migrate/*.tgz .
 
 ```bash
 curl -fsSL https://get.docker.com | sh     # 装 Docker（含 compose 插件）
-docker network create web                  # 四个项目共享的外部网络
-mkdir -p /app/{gateway,chat,xianji,md}
+docker network create web                  # 五个项目共享的外部网络
+mkdir -p /app/{gateway,chat,xianji,md,xiaoou-portfolio}
 ```
 
 云厂商安全组放行 **80 与 443**——网关是唯一对外的服务，各项目容器都不发布宿主机端口。
 
-**3. 恢复数据**
+**3. clone 五个仓库**
+
+```bash
+cd /app/gateway          && git clone https://github.com/<你的用户名>/gateway .
+cd /app/chat             && git clone https://github.com/<你的用户名>/chat .
+cd /app/xianji           && git clone https://github.com/<你的用户名>/xianji .
+cd /app/md               && git clone https://github.com/<你的用户名>/md .
+cd /app/xiaoou-portfolio && git clone https://github.com/<你的用户名>/xiaoou-portfolio .
+```
+
+> **这一步必须在恢复数据之前做，顺序不能反。** `git clone <url> .` 只接受**空目录**，
+> 先执行下面第 4 步（`tar xzf`）再 clone 的话，每个仓库都会直接失败：
+> `fatal: destination path '.' already exists and is not an empty directory.`
+
+**4. 恢复数据**
 
 ```bash
 tar xzf chat.tgz    -C /app/chat
 tar xzf xianji.tgz  -C /app/xianji
 tar xzf md.tgz      -C /app/md
 tar xzf gateway.tgz -C /app/gateway
+tar xzf xiaoou.tgz  -C /app/xiaoou-portfolio
 chmod 600 /app/gateway/certs/*.key
 ```
+
+`.env`、`certs/`、`images/` 都在各仓库的 `.gitignore` 里，解包进去不会和 git 冲突。
 
 > 证书必须在启动网关**之前**就位：`docker-compose.yml` 把 `./certs` 挂进了容器，
 > 读不到证书 nginx 会启动失败，而这个容器同时管着 80 和 443，一挂整站不通。
 
-**4. 部署四个项目**
+**5. 启动**
 
 ```bash
-cd /app/gateway && git clone https://github.com/<你的用户名>/gateway . && docker compose up -d
-cd /app/chat    && git clone https://github.com/<你的用户名>/chat .    && docker compose up -d --build
-cd /app/xianji  && git clone https://github.com/<你的用户名>/xianji .  && docker compose up -d --build
-cd /app/md      && git clone https://github.com/<你的用户名>/md .      && docker compose up -d --build
+cd /app/gateway          && docker compose up -d
+cd /app/chat             && docker compose up -d --build
+cd /app/xianji           && docker compose up -d --build
+cd /app/md               && docker compose up -d --build
+cd /app/xiaoou-portfolio && docker compose up -d --build
 ```
 
 > 先起网关没关系——它的 `proxy_pass` 是变量形式、按请求解析，项目没起只会让
 > 那条路径 502，不会让网关自己起不来。
 
-**5. 改 CI secrets**
+**6. 改 CI secrets**
 
-四个仓库都要把 `SERVER_HOST` 改成新 IP；如果新机器换了 SSH 密钥，
+五个仓库都要把 `SERVER_HOST` 改成新 IP；如果新机器换了 SSH 密钥，
 `SERVER_SSH_KEY` 也要换（`SERVER_USER` 一般不变）。改完随便 push 一次，
 看 CI 能否连上新机器，就是最好的验证。
 
-**6. 验证**
+**7. 验证**
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' http://<新IP>/            # 期望 302 → /guitar/
 curl -s -o /dev/null -w '%{http_code}\n' http://<新IP>/chat/       # 期望 200
 curl -s -o /dev/null -w '%{http_code}\n' http://<新IP>/md/         # 期望 200
+curl -s -o /dev/null -w '%{http_code}\n' http://<新IP>/healthz     # 期望 200（网关自检）
 curl -s -o /dev/null -w '%{http_code}\n' https://www.jnnnn.top/    # 期望 302 → /guitar/
 curl -s -o /dev/null -w '%{http_code}\n' https://www.jnnnn.top/chat/  # 期望 200
 curl -s -o /dev/null -w '%{http_code}\n' https://www.jnnnn.top/md/    # 期望 200
 curl -s -o /dev/null -w '%{http_code}\n' https://www.jnnnn.top/md-api/auth-check  # 期望 401
 curl -s -o /dev/null -w '%{http_code}\n' -L http://www.jnnnn.top/  # 期望 200（80 跳 443）
+
+# 作品集：health 里那个 "missing" 数组就是「哪些图片文件没到位」，期望是空的
+curl -s https://www.jnnnn.top/portfolio-api/health                 # 期望 {"ok":true,...,"missing":[]}
+curl -s -o /dev/null -w '%{http_code} %{content_type}\n' \
+     https://www.jnnnn.top/portfolio-images/thumb/4.jpg            # 期望 200 image/jpeg
 ```
 
 **443 一律返回 000 / 卡住**，八成是安全组没放行 443，不是 nginx 的问题。
 
 再手动确认 `/chat/` 能用 `.env` 里的密码登录、`/guitar/` 能正常浏览曲谱、
-`/md/` 能用密码进去并看到文稿列表。
+`/md/` 能用密码进去并看到文稿列表；作品集没有网页可看，要用微信开发者工具
+开 `miniprogram/` 真机预览。
 
-**7. 收尾**
+> **作品集的图片最容易漏搬**：图片不在仓库里，`images/` 忘了恢复的话，
+> `/portfolio-api/content` **照样返回 200**（那份清单来自仓库里的 `gallery.json`），
+> 光看它发现不了。认准两处：`/portfolio-api/health` 的 `ok` 会变成 **`false`**、
+> `missing` 列出缺哪几个文件；`/portfolio-images/full/*` 和 `.../thumb/*` 则直接 404
+> （缩略图是从原图现生成的，原图不在就生成不出来）。
+
+**8. 收尾**
 
 域名 A 记录改指向新 IP 即可，nginx 完全不用改（`server_name` 已经是 `jnnnn.top` 两个名字）。
 
